@@ -118,7 +118,23 @@ Open in WPILib VSCode, then from the **WPILib** command palette:
 - `WPILib: Simulate Robot Code` — launches the simulator GUI with the field, joysticks, and NetworkTables view
 - `WPILib: Deploy Robot Code` — pushes to the RIO
 
-This project has been verified to build and launch the WPILib simulator on **WPILib 2026.2.1** with **Phoenix 6 26.3.0**. The sim reports `[phoenix] CANbus Connected: sim` and the four-module swerve drive registers as expected.
+Or from a shell with WPILib 2026 installed:
+
+```bash
+./gradlew build               # compile + tests
+./gradlew simulateJavaRelease # launch the sim GUI
+```
+
+This project has been verified to build with zero warnings and launch the WPILib simulator on **WPILib 2026.2.1** with **Phoenix 6 26.3.0**. On startup the sim reports:
+
+```
+Simulator GUI Initialized!
+HAL Extensions: Successfully loaded extension
+********** Robot program starting **********
+********** Robot program startup complete **********
+[phoenix] CANbus Connected: sim
+[phoenix] CANbus Network Up: sim
+```
 
 The team number is set to `1334` in `.wpilib/wpilib_preferences.json` — change it for your team.
 
@@ -129,13 +145,13 @@ The team number is set to `1334` in `.wpilib/wpilib_preferences.json` — change
 
 If you regenerate the project from Tuner X, overwrite `TunerConstants.java` and **re-apply the Pigeon `MountPoseRoll = 180` line** — it is not part of the generator's default output.
 
-> **Note on the committed steer-motor type.** The file as committed uses `TalonFX` for steer (i.e., it would compile against a *X60-steer* MK4i). The physical MiniMiniBot uses Kraken X44 steer motors (TalonFXS). The generic params and `::new` references in `TunerSwerveDrivetrain` and the `SwerveModuleConstantsFactory<...>` need to be swapped to `TalonFXS` once you re-run Tuner X with X44 selected. Doing this in the committed file would require pinning the exact `SteerMotorArrangement` enum value Tuner X emits for X44, which can shift between Phoenix6 releases — so the repo keeps a known-good X60-steer template and leaves the X44 swap as a one-line regenerate. The hardware photos and CAN-ID table reflect the real X44 build.
+> **Steer-motor template note.** Committed `TunerConstants.java` uses `TalonFX` for steer so the project compiles and sims cleanly against stock CTRE examples. The physical robot uses Kraken X44 (TalonFXS); regenerating from Tuner X with X44 selected will swap `TalonFX → TalonFXS` in the `SwerveModuleConstantsFactory<...>` generics and the `::new` references inside `TunerSwerveDrivetrain`. Everything else (gear ratios, geometry, CAN IDs, Pigeon mount pose) stays as written. The hardware photos and CAN-ID table reflect the real X44 build.
 
 ---
 
 ## Calibration checklist (before driving)
 
-1. **Steer encoder offsets** — point all four wheels straight forward, run Tuner X "Set wheel offsets," paste the four offset values into `TunerConstants.k*EncoderOffsetRot`.
+1. **Steer encoder offsets** — point all four wheels straight forward, run Tuner X "Set wheel offsets," paste the four offset values into `TunerConstants.k*EncoderOffset` (the field is an `Angle`; use `Rotations.of(...)` or `Degrees.of(...)`).
 2. **Drive motor inversion** — sanity-check that all four wheels spin the same direction when pushed forward. Flip `kInvertLeftSide` / `kInvertRightSide` if not.
 3. **Pigeon mount pose** — drive forward, confirm the reported heading in NetworkTables (`DriveState/Pose`) does not flip sign. If it does, the `MountPoseRoll` may need to be `-180` instead of `+180` depending on which face is "down."
 4. **SysId** — the `driveGains` / `steerGains` in `TunerConstants.java` are reasonable starting values, **not** characterized values. Run SysId before competing.
@@ -149,8 +165,10 @@ If you regenerate the project from Tuner X, overwrite `TunerConstants.java` and 
 ├── README.md
 ├── build.gradle
 ├── settings.gradle
+├── gradlew / gradlew.bat / gradle/wrapper/   Gradle 8.11 wrapper
 ├── vendordeps/
-│   └── Phoenix6.json
+│   ├── Phoenix6.json
+│   └── WPILibNewCommands.json
 ├── docs/
 │   └── images/                  reference photos
 └── src/main/java/frc/robot/
