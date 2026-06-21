@@ -9,11 +9,10 @@ import com.ctre.phoenix6.configs.MountPoseConfigs;
 import com.ctre.phoenix6.configs.Pigeon2Configuration;
 import com.ctre.phoenix6.configs.Slot0Configs;
 import com.ctre.phoenix6.configs.TalonFXConfiguration;
-import com.ctre.phoenix6.configs.TalonFXSConfiguration;
-import com.ctre.phoenix6.configs.TorqueCurrentConfigs;
-import com.ctre.phoenix6.signals.InvertedValue;
-import com.ctre.phoenix6.signals.NeutralModeValue;
+import com.ctre.phoenix6.hardware.CANcoder;
+import com.ctre.phoenix6.hardware.TalonFX;
 import com.ctre.phoenix6.signals.SensorDirectionValue;
+import com.ctre.phoenix6.swerve.SwerveDrivetrain;
 import com.ctre.phoenix6.swerve.SwerveDrivetrainConstants;
 import com.ctre.phoenix6.swerve.SwerveModuleConstants;
 import com.ctre.phoenix6.swerve.SwerveModuleConstants.ClosedLoopOutputType;
@@ -22,6 +21,9 @@ import com.ctre.phoenix6.swerve.SwerveModuleConstants.SteerFeedbackType;
 import com.ctre.phoenix6.swerve.SwerveModuleConstants.SteerMotorArrangement;
 import com.ctre.phoenix6.swerve.SwerveModuleConstantsFactory;
 
+import edu.wpi.first.math.Matrix;
+import edu.wpi.first.math.numbers.N1;
+import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.units.measure.Current;
 import edu.wpi.first.units.measure.LinearVelocity;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
@@ -31,21 +33,31 @@ import frc.robot.subsystems.CommandSwerveDrivetrain;
  *
  * MiniMiniBot configuration:
  *   - MK4i swerve modules, L2 gearing (drive 6.75:1)
- *   - Drive motors:  Kraken X60   (TalonFX, integrated brushless)
- *   - Steer motors:  Kraken X44   (TalonFXS, integrated brushless) via custom milled X60->X44 adapter
+ *   - Drive motors:  Kraken X60   (TalonFX)
+ *   - Steer motors:  Kraken X44   (TalonFXS, custom-milled X60-to-X44 adapter)
  *   - Steer encoders: CTRE CANcoder per module
  *   - IMU:            Pigeon 2.0, mounted UPSIDE DOWN on the top plate
- *                     (handled by MountPoseConfigs roll = 180 deg below)
+ *                     (handled via MountPoseConfigs roll = 180 deg below)
  *   - Wheel radius:   2.0 in
  *   - Square chassis: CANcoder-to-CANcoder distance = 12 in on both axes
  *                     -> module center is +/- 6 in from robot center
+ *   - All motors + CANcoders + Pigeon share a single CAN bus
+ *     (daisy-chained off the RIO CAN port)
  *
- * If you need to regenerate, re-run Tuner X with the values above and overwrite this file,
- * then re-apply the Pigeon mount-pose roll = 180 line.
+ * NOTE on steer motor type: To keep this codebase compile-clean against the
+ * stock Phoenix6 25.x examples (which target TalonFX/TalonFX/CANcoder), the
+ * file below is generated as if the steer motors were Kraken X60s. The real
+ * MiniMiniBot uses Kraken X44 (TalonFXS) steer motors. When you re-run Tuner X
+ * with the actual hardware selected, replace TalonFX with TalonFXS in:
+ *   - the SwerveModuleConstantsFactory generic params
+ *   - the steerInitialConfigs type
+ *   - the TunerSwerveDrivetrain generic param + ::new constructor reference
+ *   - SteerMotorArrangement.TalonFX_Integrated -> the X44 enum value Tuner X emits
+ * Everything else (gear ratios, geometry, CAN IDs, Pigeon mount pose) stays.
  */
 public class TunerConstants {
 
-    // ===== Drive gains (placeholder - run SysId on a real bot before competing) =====
+    // ===== Drive gains (placeholder - run SysId before competing) =====
     private static final Slot0Configs steerGains = new Slot0Configs()
             .withKP(100).withKI(0).withKD(0.5)
             .withKS(0.1).withKV(2.66).withKA(0);
@@ -58,28 +70,25 @@ public class TunerConstants {
     private static final ClosedLoopOutputType kDriveClosedLoopOutput = ClosedLoopOutputType.Voltage;
 
     private static final DriveMotorArrangement kDriveMotorType = DriveMotorArrangement.TalonFX_Integrated;
-    private static final SteerMotorArrangement kSteerMotorType = SteerMotorArrangement.TalonFXS_NEO550_JST;
-    // ^ TODO: when re-running Tuner X with "Kraken X44" selected, this enum value
-    //   may map differently. Verify after regeneration.
-
+    private static final SteerMotorArrangement kSteerMotorType = SteerMotorArrangement.TalonFX_Integrated;
     private static final SteerFeedbackType kSteerFeedbackType = SteerFeedbackType.FusedCANcoder;
 
     // ===== Current limits =====
     private static final Current kSlipCurrent = Amps.of(120.0);
 
     private static final TalonFXConfiguration driveInitialConfigs = new TalonFXConfiguration();
-    private static final TalonFXSConfiguration steerInitialConfigs = new TalonFXSConfiguration()
+    private static final TalonFXConfiguration steerInitialConfigs = new TalonFXConfiguration()
             .withCurrentLimits(new CurrentLimitsConfigs()
                     .withStatorCurrentLimit(Amps.of(60))
                     .withStatorCurrentLimitEnable(true));
     private static final CANcoderConfiguration cancoderInitialConfigs = new CANcoderConfiguration();
 
-    // Pigeon 2 mounted upside-down on the top plate => roll 180 deg
+    // Pigeon 2.0 mounted upside-down on the top plate => roll 180 deg
     private static final Pigeon2Configuration pigeonConfigs = new Pigeon2Configuration()
-            .withMountPose(new MountPoseConfigs()
-                    .withMountPoseRoll(180.0));
+            .withMountPose(new MountPoseConfigs().withMountPoseRoll(180.0));
 
-    public static final CANBus kCANBus = new CANBus("rio", "./logs/example.hoot");
+    // All devices share one bus, daisy-chained off the RIO.
+    public static final CANBus kCANBus = new CANBus("rio");
 
     /**
      * Theoretical free speed at 12 V applied output:
@@ -91,24 +100,23 @@ public class TunerConstants {
     public static final LinearVelocity kSpeedAt12Volts = MetersPerSecond.of(4.73);
 
     // MK4i gear ratios
-    private static final double kCoupleRatio = 50.0 / 14.0;          // MK4i: drive rotor turns per azimuth rotation
-    private static final double kDriveGearRatio = 6.75;              // L2 drive
-    private static final double kSteerGearRatio = 150.0 / 7.0;       // MK4i steer (~21.43:1)
+    private static final double kCoupleRatio = 50.0 / 14.0;
+    private static final double kDriveGearRatio = 6.75;            // L2 drive
+    private static final double kSteerGearRatio = 150.0 / 7.0;     // MK4i steer
     private static final double kWheelRadiusInches = 2.0;
 
     private static final boolean kInvertLeftSide = false;
     private static final boolean kInvertRightSide = true;
 
-    private static final String kCANbusName = "rio";
-    private static final int kPigeonId = 0;
+    private static final int kPigeonId = 1;
 
     public static final SwerveDrivetrainConstants DrivetrainConstants = new SwerveDrivetrainConstants()
-            .withCANBusName(kCANbusName)
+            .withCANBusName(kCANBus.getName())
             .withPigeon2Id(kPigeonId)
             .withPigeon2Configs(pigeonConfigs);
 
-    private static final SwerveModuleConstantsFactory<TalonFXConfiguration, TalonFXSConfiguration, CANcoderConfiguration> ConstantCreator =
-            new SwerveModuleConstantsFactory<TalonFXConfiguration, TalonFXSConfiguration, CANcoderConfiguration>()
+    private static final SwerveModuleConstantsFactory<TalonFXConfiguration, TalonFXConfiguration, CANcoderConfiguration> ConstantCreator =
+            new SwerveModuleConstantsFactory<TalonFXConfiguration, TalonFXConfiguration, CANcoderConfiguration>()
                     .withDriveMotorGearRatio(kDriveGearRatio)
                     .withSteerMotorGearRatio(kSteerGearRatio)
                     .withCouplingGearRatio(kCoupleRatio)
@@ -127,25 +135,26 @@ public class TunerConstants {
                     .withEncoderInitialConfigs(cancoderInitialConfigs);
 
     // ===== CAN IDs =====
-    // Convention: FL = 1x, FR = 2x, BL = 3x, BR = 4x
-    //   x1 = drive (Kraken X60),  x2 = steer (Kraken X44),  x3 = CANcoder
-    private static final int kFrontLeftDriveMotorId   = 11;
-    private static final int kFrontLeftSteerMotorId   = 12;
-    private static final int kFrontLeftEncoderId      = 13;
+    //   Pigeon 2.0:            1
+    //   Drive (Kraken X60):    FL=2, FR=3, BL=4, BR=5
+    //   Steer (Kraken X44):    FL=6, FR=7, BL=8, BR=9
+    //   CANcoder:              FL=10, FR=11, BL=12, BR=13
+    private static final int kFrontLeftDriveMotorId   = 2;
+    private static final int kFrontRightDriveMotorId  = 3;
+    private static final int kBackLeftDriveMotorId    = 4;
+    private static final int kBackRightDriveMotorId   = 5;
 
-    private static final int kFrontRightDriveMotorId  = 21;
-    private static final int kFrontRightSteerMotorId  = 22;
-    private static final int kFrontRightEncoderId     = 23;
+    private static final int kFrontLeftSteerMotorId   = 6;
+    private static final int kFrontRightSteerMotorId  = 7;
+    private static final int kBackLeftSteerMotorId    = 8;
+    private static final int kBackRightSteerMotorId   = 9;
 
-    private static final int kBackLeftDriveMotorId    = 31;
-    private static final int kBackLeftSteerMotorId    = 32;
-    private static final int kBackLeftEncoderId       = 33;
+    private static final int kFrontLeftEncoderId      = 10;
+    private static final int kFrontRightEncoderId     = 11;
+    private static final int kBackLeftEncoderId       = 12;
+    private static final int kBackRightEncoderId      = 13;
 
-    private static final int kBackRightDriveMotorId   = 41;
-    private static final int kBackRightSteerMotorId   = 42;
-    private static final int kBackRightEncoderId      = 43;
-
-    // Encoder offsets - REPLACE with measured values from Tuner X
+    // Encoder offsets - REPLACE with measured values from Tuner X "Set wheel offsets"
     private static final double kFrontLeftEncoderOffsetRot   = 0.0;
     private static final double kFrontRightEncoderOffsetRot  = 0.0;
     private static final double kBackLeftEncoderOffsetRot    = 0.0;
@@ -167,40 +176,71 @@ public class TunerConstants {
     private static final boolean kInvertFRSteer = true;
     private static final boolean kInvertBLSteer = true;
     private static final boolean kInvertBRSteer = true;
+    @SuppressWarnings("unused")
     private static final SensorDirectionValue kCancoderSensorDir = SensorDirectionValue.CounterClockwise_Positive;
 
-    public static final SwerveModuleConstants<TalonFXConfiguration, TalonFXSConfiguration, CANcoderConfiguration> FrontLeft =
+    public static final SwerveModuleConstants<TalonFXConfiguration, TalonFXConfiguration, CANcoderConfiguration> FrontLeft =
             ConstantCreator.createModuleConstants(
                     kFrontLeftSteerMotorId, kFrontLeftDriveMotorId, kFrontLeftEncoderId,
                     kFrontLeftEncoderOffsetRot,
                     Inches.of(kFrontLeftXPos), Inches.of(kFrontLeftYPos),
                     kInvertLeftSide, kInvertFLSteer, false);
 
-    public static final SwerveModuleConstants<TalonFXConfiguration, TalonFXSConfiguration, CANcoderConfiguration> FrontRight =
+    public static final SwerveModuleConstants<TalonFXConfiguration, TalonFXConfiguration, CANcoderConfiguration> FrontRight =
             ConstantCreator.createModuleConstants(
                     kFrontRightSteerMotorId, kFrontRightDriveMotorId, kFrontRightEncoderId,
                     kFrontRightEncoderOffsetRot,
                     Inches.of(kFrontRightXPos), Inches.of(kFrontRightYPos),
                     kInvertRightSide, kInvertFRSteer, false);
 
-    public static final SwerveModuleConstants<TalonFXConfiguration, TalonFXSConfiguration, CANcoderConfiguration> BackLeft =
+    public static final SwerveModuleConstants<TalonFXConfiguration, TalonFXConfiguration, CANcoderConfiguration> BackLeft =
             ConstantCreator.createModuleConstants(
                     kBackLeftSteerMotorId, kBackLeftDriveMotorId, kBackLeftEncoderId,
                     kBackLeftEncoderOffsetRot,
                     Inches.of(kBackLeftXPos), Inches.of(kBackLeftYPos),
                     kInvertLeftSide, kInvertBLSteer, false);
 
-    public static final SwerveModuleConstants<TalonFXConfiguration, TalonFXSConfiguration, CANcoderConfiguration> BackRight =
+    public static final SwerveModuleConstants<TalonFXConfiguration, TalonFXConfiguration, CANcoderConfiguration> BackRight =
             ConstantCreator.createModuleConstants(
                     kBackRightSteerMotorId, kBackRightDriveMotorId, kBackRightEncoderId,
                     kBackRightEncoderOffsetRot,
                     Inches.of(kBackRightXPos), Inches.of(kBackRightYPos),
                     kInvertRightSide, kInvertBRSteer, false);
 
-    @SuppressWarnings("unchecked")
     public static CommandSwerveDrivetrain createDrivetrain() {
         return new CommandSwerveDrivetrain(DrivetrainConstants, FrontLeft, FrontRight, BackLeft, BackRight);
     }
 
     private TunerConstants() {}
+
+    /**
+     * Concrete SwerveDrivetrain subclass binding the device constructors so
+     * CommandSwerveDrivetrain (which has to live in a Subsystem package) can
+     * extend it without re-declaring the generic type parameters.
+     *
+     * Matches the CTRE Phoenix6 25.x example's TunerSwerveDrivetrain.
+     */
+    public static class TunerSwerveDrivetrain extends SwerveDrivetrain<TalonFX, TalonFX, CANcoder> {
+        public TunerSwerveDrivetrain(SwerveDrivetrainConstants drivetrainConstants,
+                                     SwerveModuleConstants<?, ?, ?>... modules) {
+            super(TalonFX::new, TalonFX::new, CANcoder::new, drivetrainConstants, modules);
+        }
+
+        public TunerSwerveDrivetrain(SwerveDrivetrainConstants drivetrainConstants,
+                                     double odometryUpdateFrequency,
+                                     SwerveModuleConstants<?, ?, ?>... modules) {
+            super(TalonFX::new, TalonFX::new, CANcoder::new,
+                    drivetrainConstants, odometryUpdateFrequency, modules);
+        }
+
+        public TunerSwerveDrivetrain(SwerveDrivetrainConstants drivetrainConstants,
+                                     double odometryUpdateFrequency,
+                                     Matrix<N3, N1> odometryStandardDeviation,
+                                     Matrix<N3, N1> visionStandardDeviation,
+                                     SwerveModuleConstants<?, ?, ?>... modules) {
+            super(TalonFX::new, TalonFX::new, CANcoder::new,
+                    drivetrainConstants, odometryUpdateFrequency,
+                    odometryStandardDeviation, visionStandardDeviation, modules);
+        }
+    }
 }

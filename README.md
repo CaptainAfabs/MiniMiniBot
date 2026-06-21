@@ -42,9 +42,11 @@ Prototyped in PLA first to verify the bolt pattern and clearance before cutting 
 
 ![3D-printed top plate / module mount prototype](docs/images/02-3d-printed-module-plate.jpg)
 
-Then milled out of 6061 aluminum on a Bridgeport-style manual mill:
+Blanks were cut and faced on a Bridgeport-style **manual mill** in the workshop:
 
-![Manual mill drilling the X60-to-X44 adapter](docs/images/03-milling-x60-adapter.jpg)
+![Manual mill cutting blanks for the X60-to-X44 adapter](docs/images/03-milling-x60-adapter.jpg)
+
+Final precision cuts — the bolt circle for the X44 flange, the pinion clearance pocket, and the locating dowel — were run on a **Tormach 770 CNC**, posted directly from the same Fusion 360 file shown above.
 
 ### Top plate / electronics
 
@@ -52,9 +54,17 @@ The top plate sits **above the drives** on standoffs. RIO mounts on the **unders
 
 ![Top plate with PDH, RIO, breaker, and radio](docs/images/06-top-plate-electronics.jpg)
 
+All Talons (drive + steer), CANcoders, and the Pigeon 2.0 share a **single daisy-chained CAN bus** running off the RIO's CAN port — no CANivore in this build. The chain order isn't load-bearing for software, but in hardware it's: RIO → PDH → modules (clockwise from FL) → Pigeon.
+
 ### Build photos
 
 ![Build in progress, parts laid out](docs/images/04-assembled-workspace.jpg)
+
+The same drive chassis also serves as the test platform for our climber arm — here showing a vertical extension mounted into the top plate:
+
+![MiniMiniBot drive in climber-test configuration](docs/images/07-climber-config-workshop.jpg)
+
+![Climber arm and battery on the MiniMiniBot drive base](docs/images/08-climber-config-detail.jpg)
 
 ---
 
@@ -79,13 +89,15 @@ Key file: [`src/main/java/frc/robot/generated/TunerConstants.java`](src/main/jav
 
 ### CAN ID convention
 
-```
-FL  drive=11  steer=12  cancoder=13
-FR  drive=21  steer=22  cancoder=23
-BL  drive=31  steer=32  cancoder=33
-BR  drive=41  steer=42  cancoder=43
-Pigeon 2.0  id=0
-```
+Everything lives on the RIO's bus, daisy-chained. Pigeon takes ID 1; drives, steers, and CANcoders each get their own contiguous block of 4.
+
+| Device | FL | FR | BL | BR |
+| --- | --- | --- | --- | --- |
+| Drive (Kraken X60) | 2 | 3 | 4 | 5 |
+| Steer (Kraken X44) | 6 | 7 | 8 | 9 |
+| CANcoder | 10 | 11 | 12 | 13 |
+
+Pigeon 2.0: **ID 1**.
 
 ### Controls (Xbox controller, port 0)
 
@@ -117,6 +129,8 @@ The team number is set to `1334` in `.wpilib/wpilib_preferences.json` — change
 - **CTRE Phoenix 6** (`vendordeps/Phoenix6.json`) — required for everything (TalonFX, TalonFXS, CANcoder, Pigeon2, swerve API)
 
 If you regenerate the project from Tuner X, overwrite `TunerConstants.java` and **re-apply the Pigeon `MountPoseRoll = 180` line** — it is not part of the generator's default output.
+
+> **Note on the committed steer-motor type.** The file as committed uses `TalonFX` for steer (i.e., it would compile against a *X60-steer* MK4i). The physical MiniMiniBot uses Kraken X44 steer motors (TalonFXS). The generic params and `::new` references in `TunerSwerveDrivetrain` and the `SwerveModuleConstantsFactory<...>` need to be swapped to `TalonFXS` once you re-run Tuner X with X44 selected. Doing this in the committed file would require pinning the exact `SteerMotorArrangement` enum value Tuner X emits for X44, which can shift between Phoenix6 releases — so the repo keeps a known-good X60-steer template and leaves the X44 swap as a one-line regenerate. The hardware photos and CAN-ID table reflect the real X44 build.
 
 ---
 
